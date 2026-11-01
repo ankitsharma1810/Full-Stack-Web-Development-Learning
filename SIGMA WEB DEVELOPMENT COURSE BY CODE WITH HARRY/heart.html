@@ -1,0 +1,193 @@
+<!doctype html>
+
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>3D Pumping Heart — Three.js</title>
+  <style>
+    html,body { height:100%; margin:0; background:#0b0b12; }
+    #ui { position: absolute; left:12px; top:12px; z-index:2; color:#fff; font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial; }
+    .label{ font-size:13px; margin-bottom:6px }
+    input[type=range]{ width:200px }
+    #credits{ position: absolute; right:12px; bottom:12px; color:#888; font-size:12px }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div class="label">Pulse speed: <span id="speedVal">1.0</span></div>
+    <input id="speed" type="range" min="0.1" max="4" step="0.05" value="1">
+    <div class="label">Pulse intensity: <span id="intVal">0.25</span></div>
+    <input id="int" type="range" min="0" max="1" step="0.01" value="0.25">
+    <div class="label">Gloss (metalness): <span id="metVal">0.5</span></div>
+    <input id="met" type="range" min="0" max="1" step="0.01" value="0.5">
+    <div class="label">Color:</div>
+    <input id="color" type="color" value="#ff2d55">
+  </div>
+  <div id="credits">Use mouse to orbit / scroll to zoom</div>  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.152.2/build/three.module.js';
+    import { OrbitControls } from 'https://unpkg.com/three@0.152.2/examples/jsm/controls/OrbitControls.js';
+
+    // --- Scene + Camera + Renderer ---
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 200);
+    camera.position.set(0, 1.2, 4);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+
+    // --- Lighting ---
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x220022, 0.6);
+    scene.add(hemi);
+    const rim = new THREE.DirectionalLight(0xffe7d1, 0.9);
+    rim.position.set(5, 5, 2);
+    scene.add(rim);
+    const fill = new THREE.PointLight(0xffa0b0, 0.6, 10);
+    fill.position.set(-4, -2, 3);
+    scene.add(fill);
+
+    // --- Heart geometry using LatheGeometry (revolved 2D profile) ---
+    function heartProfilePoints(detail=80){
+      // Create a 2D heart outline (top-half profile) and revolve around Y axis
+      const pts = [];
+      // param t from 0 to pi, generate a typical heart-shaped 2D curve scaled to nice proportions
+      for(let i=0;i<=detail;i++){
+        const t = Math.PI * i / detail; // 0..pi
+        // 2D parametric heart curve (modified) in x-y plane (we will treat y as vertical)
+        const x = 0.5 * (16 * Math.pow(Math.sin(t),3)) * 0.03; // narrow
+        const y = -0.5 * (13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t)) * 0.03 + 0.5;
+        // push point, but ensure x is positive for lathe (profile from axis outward)
+        pts.push(new THREE.Vector2(Math.abs(x)+0.02, y));
+      }
+      // Add a pointed bottom to make heart tip
+      pts.push(new THREE.Vector2(0.02, -0.2));
+      return pts;
+    }
+
+    const profile = heartProfilePoints(120);
+    const segments = 120;
+    const heartGeo = new THREE.LatheGeometry(profile, segments);
+    // Smooth and increase detail
+    heartGeo.computeVertexNormals();
+
+    // Store original positions for animation
+    const posAttr = heartGeo.attributes.position;
+    const vertexCount = posAttr.count;
+    const original = new Float32Array(vertexCount * 3);
+    for(let i=0;i<vertexCount*3;i++) original[i] = posAttr.array[i];
+
+    // Material
+    const mat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color('#ff2d55'),
+      metalness: 0.5,
+      roughness: 0.35,
+      emissive: new THREE.Color(0x300000).multiplyScalar(0.6),
+      side: THREE.DoubleSide,
+      flatShading: false
+    });
+
+    const heart = new THREE.Mesh(heartGeo, mat);
+    heart.position.y = 0;
+    heart.rotation.y = Math.PI; // face correct side
+    scene.add(heart);
+
+    // small glossy core (inner shine)
+    const innerGeo = new THREE.SphereGeometry(0.38, 32, 24);
+    const innerMat = new THREE.MeshPhysicalMaterial({
+      color: 0xff6b88,
+      metalness: 0.1,
+      roughness: 0.2,
+      transparent: true,
+      opacity: 0.35,
+      clearcoat: 0.8,
+      clearcoatRoughness:0.05
+    });
+    const core = new THREE.Mesh(innerGeo, innerMat);
+    core.scale.set(1,0.9,1);
+    core.position.set(0,0.15,0);
+    heart.add(core);
+
+    // Floor reflection via subtle plane
+    const groundGeo = new THREE.CircleGeometry(6, 64);
+    const groundMat = new THREE.MeshBasicMaterial({color:0x07060a, opacity:0.7, transparent:true});
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI/2;
+    ground.position.y = -0.9;
+    scene.add(ground);
+
+    // Controls
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    // UI bindings
+    const speedSlider = document.getElementById('speed');
+    const intSlider = document.getElementById('int');
+    const metSlider = document.getElementById('met');
+    const colorPicker = document.getElementById('color');
+    const speedVal = document.getElementById('speedVal');
+    const intVal = document.getElementById('intVal');
+    const metVal = document.getElementById('metVal');
+
+    speedSlider.addEventListener('input', ()=> speedVal.textContent = speedSlider.value);
+    intSlider.addEventListener('input', ()=> intVal.textContent = intSlider.value);
+    metSlider.addEventListener('input', ()=> mat.metalness = parseFloat(metSlider.value), false);
+    colorPicker.addEventListener('input', ()=> mat.color.set(colorPicker.value));
+
+    // Animation parameters
+    let clock = new THREE.Clock();
+
+    function animate(){
+      requestAnimationFrame(animate);
+      const t = clock.getElapsedTime();
+      const speed = parseFloat(speedSlider.value);
+      const intensity = parseFloat(intSlider.value);
+
+      // Apply a global scale pulse (heart pumps) combined with vertex normal offset
+      const globalPulse = 1 + 0.08 * Math.sin(t * Math.PI * 2 * speed) ;
+      heart.scale.setScalar(globalPulse);
+
+      // Vertex-level subtle breathing along normals
+      // We'll move each vertex along its normal by a small amount depending on its y position (so lobes pump more)
+      // For performance, we mutate the position attribute array directly and then mark it needsUpdate
+      const positions = posAttr.array;
+      // recompute normals from static original each frame after we adjust positions, but easier: compute displacement using precomputed normals
+      // We'll compute a simple per-vertex offset using the original position's y component
+      for(let i=0;i<vertexCount;i++){
+        const ix = i*3, iy = ix+1, iz = ix+2;
+        const ox = original[ix], oy = original[iy], oz = original[iz];
+        // offset amplitude shape: top lobes (higher oy) move more
+        const lobeFactor = Math.max(0, (oy+0.5));
+        const offset = intensity * 0.22 * Math.sin(t * Math.PI * 2 * speed + oy * 8);
+        // compute outward direction approximately by using the vector from center to vertex (works for lathe heart)
+        const dirx = ox * 1.0;
+        const diry = oy * 0.6 + 0.05;
+        const dirz = oz * 1.0;
+        const len = Math.sqrt(dirx*dirx + diry*diry + dirz*dirz) + 1e-6;
+        positions[ix]  = ox + (dirx/len) * offset * lobeFactor;
+        positions[iy]  = oy + (diry/len) * offset * lobeFactor;
+        positions[iz]  = oz + (dirz/len) * offset * lobeFactor;
+      }
+
+      posAttr.needsUpdate = true;
+      heartGeo.computeVertexNormals();
+
+      // slight rotation for aesthetics
+      heart.rotation.y += 0.002;
+
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    // resize handling
+    window.addEventListener('resize', ()=>{
+      camera.aspect = innerWidth/innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    // start
+    animate();
+  </script></body>
+</html>
